@@ -1,0 +1,14 @@
+services:
+  worker:
+    image: ghcr.io/johnnycyan/waze-morphe-patches-worker:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      GITHUB_REPO: Johnnycyan/waze-morphe-patches
+      # Fine-grained token for this repository only: Contents read/write, Issues read/write.
+      GITHUB_TOKEN: ${GITHUB_TOKEN:?set GITHUB_TOKEN in .env}
+      # Optional basic-auth password for the page (any username).
+      UI_PASSWORD: ${UI_PASSWORD:-}
+    volumes:
+      - ./data:/data

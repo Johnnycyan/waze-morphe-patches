@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Waze Patches worker</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0e1116;
+    --card: #171b22;
+    --line: #262c36;
+    --text: #e6e9ef;
+    --muted: #8b94a3;
+    --accent: #33ccff;
+    --ok: #3ddc84;
+    --warn: #ffb547;
+    --bad: #ff5c6c;
+    --radius: 16px;
+    accent-color: var(--accent);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main {
+    max-width: 760px;
+    margin-inline: auto;
+    padding: 32px 16px 64px;
+    display: grid;
+    gap: 16px;
+  }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 12px; }
+  .sub { color: var(--muted); margin: 0; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+  .version { font-size: 2.2rem; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
+  .meta { color: var(--muted); font-size: 0.85rem; margin: 6px 0 0; overflow-wrap: anywhere; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 16px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: #1f2530;
+    color: var(--text);
+    font: inherit; font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #04121a; }
+  .pill {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 0.8rem; font-weight: 700;
+    background: #222833; color: var(--muted);
+  }
+  .pill[data-phase="verified"] { background: rgb(61 220 132 / 0.15); color: var(--ok); }
+  .pill[data-phase="running"], .pill[data-phase="queued"] { background: rgb(51 204 255 / 0.15); color: var(--accent); }
+  .pill[data-phase="needs_apk"] { background: rgb(255 181 71 / 0.15); color: var(--warn); }
+  .pill[data-phase="failed"], .pill[data-phase="error"] { background: rgb(255 92 108 / 0.15); color: var(--bad); }
+
+  .drop {
+    display: grid; place-items: center; gap: 6px;
+    padding: 32px 16px;
+    border: 2px dashed var(--line);
+    border-radius: var(--radius);
+    text-align: center;
+    color: var(--muted);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: rgb(51 204 255 / 0.05); }
+  .drop strong { color: var(--text); }
+  .drop input { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; }
+
+  progress {
+    appearance: none;
+    border: 0 solid;
+    overflow: clip;
+    inline-size: 100%;
+    block-size: 10px;
+    margin-top: 14px;
+    --progress-bar-radius: 1e5px;
+    border-radius: var(--progress-bar-radius);
+    background: #222833;
+  }
+  progress::-webkit-progress-bar { background: transparent; }
+  progress::-webkit-progress-value {
+    background: var(--accent);
+    border-radius: var(--progress-bar-radius);
+    transition: inline-size 0.3s;
+  }
+  progress::-moz-progress-bar {
+    background: var(--accent);
+    border-radius: var(--progress-bar-radius);
+    transition: inline-size 0.3s;
+  }
+  #upload-msg { margin: 10px 0 0; min-block-size: 1.5em; }
+  #upload-msg.bad { color: var(--bad); }
+  #upload-msg.ok { color: var(--ok); }
+
+  pre {
+    margin: 12px 0 0;
+    padding: 14px;
+    max-block-size: 320px;
+    overflow: auto;
+    background: #0b0e12;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+    white-space: pre-wrap;
+  }
+  ul.files { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  ul.files li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; background: #1f2530; border-radius: 10px; }
+  ul.files span { color: var(--muted); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Waze Patches worker</h1>
+    <p class="sub">Upload the Waze build the next release needs. It's checked against Waze's signing certificate and test-patched before CI releases.</p>
+  </header>
+
+  <section class="card" aria-labelledby="needed-h">
+    <h2 id="needed-h">Needed now</h2>
+    {% if s.candidate %}
+      <p class="version">Waze {{ s.candidate.waze_version }}</p>
+      <p class="meta">
+        Bundle {{ s.candidate.version }} · nl {{ s.candidate.nl_tag }} · tts {{ s.candidate.tts_tag }} · inputs {{ s.candidate.key }}
+      </p>
+      <div class="row">
+        <span class="pill" id="phase" data-phase="{{ s.phase }}" role="status"></span>
+      </div>
+      <div class="row">
+        <a class="btn primary" href="{{ s.links.release }}" target="_blank" rel="noopener noreferrer">Open on APKMirror</a>
+        <a class="btn" href="{{ s.links.search }}" target="_blank" rel="noopener noreferrer">Search APKMirror</a>
+      </div>
+    {% else %}
+      <p class="version">Nothing pending</p>
+      <p class="meta">No candidate bundle is waiting for verification.</p>
+    {% endif %}
+    {% if s.error %}<p class="meta" style="color: var(--bad)">GitHub check failed: {{ s.error }}</p>{% endif %}
+    <p class="meta">Last checked {{ s.checked_at or "never" }}</p>
+  </section>
+
+  <section class="card" aria-labelledby="upload-h">
+    <h2 id="upload-h">Upload</h2>
+    <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data">
+      <label class="drop" id="drop" for="apk">
+        <strong>Drop the APKM here, or click to choose</strong>
+        <span>.apkm, .apk, .xapk or .apks</span>
+        <input type="file" id="apk" name="apk" accept=".apkm,.apk,.xapk,.apks" required>
+      </label>
+      <progress id="progress" max="100" value="0" aria-label="Upload progress" hidden></progress>
+      <p id="upload-msg" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+
+  {% if s.job %}
+  <section class="card" aria-labelledby="job-h">
+    <h2 id="job-h">Last verification</h2>
+    <p class="meta">State: {{ s.job.state }}{% if s.job.finished %} · finished {{ s.job.finished }}{% endif %}</p>
+    <div class="row">
+      {% if s.job.issue %}<a class="btn" href="{{ s.job.issue }}" target="_blank" rel="noopener noreferrer">Open issue</a>{% endif %}
+      {% if s.diagnostics %}<a class="btn" href="/diagnostics.zip">Download decompiled sources</a>{% endif %}
+      {% if s.job.state in ("failed", "error") %}<button class="btn" type="button" id="retry">Retry</button>{% endif %}
+    </div>
+    {% if s.job.log %}<pre>{{ s.job.log }}</pre>{% endif %}
+  </section>
+  {% endif %}
+
+  <section class="card" aria-labelledby="files-h">
+    <h2 id="files-h">Stored APKs</h2>
+    {% if s.apks %}
+      <ul class="files">{% for name, mb in s.apks %}<li>{{ name }} <span>{{ mb }} MB</span></li>{% endfor %}</ul>
+    {% else %}
+      <p class="meta">None yet.</p>
+    {% endif %}
+  </section>
+</main>
+
+<script>
+  const LABELS = {
+    idle: "Idle",
+    needs_apk: "Waiting for upload",
+    queued: "APK stored, starting",
+    running: "Verifying…",
+    verified: "Verified, CI is releasing",
+    failed: "TTS patch failed, see issue",
+    error: "Worker error",
+  };
+  const phase = document.getElementById("phase");
+  const setPhase = (p) => { if (phase) { phase.dataset.phase = p; phase.textContent = LABELS[p] ?? p; } };
+  setPhase(phase?.dataset.phase);
+
+  // Reload when the phase changes so the job card and links stay current.
+  let last = phase?.dataset.phase;
+  setInterval(async () => {
+    if (uploading) return;
+    try {
+      const s = await (await fetch("/api/status")).json();
+      if (s.phase !== last) location.reload();
+    } catch {}
+  }, 10000);
+
+  const form = document.getElementById("upload-form");
+  const input = document.getElementById("apk");
+  const drop = document.getElementById("drop");
+  const bar = document.getElementById("progress");
+  const msg = document.getElementById("upload-msg");
+  let uploading = false;
+
+  const say = (text, kind = "") => { msg.textContent = text; msg.className = kind; };
+
+  function send(file) {
+    if (!file || uploading) return;
+    uploading = true;
+    const data = new FormData();
+    data.append("apk", file);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/upload");
+    bar.hidden = false;
+    bar.removeAttribute("value"); // indeterminate until the first progress event
+    say(`Uploading ${file.name}…`);
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      bar.value = Math.round((e.loaded / e.total) * 100);
+      if (e.loaded === e.total) say("Checking package and signature…");
+    };
+    xhr.onload = () => {
+      uploading = false;
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status < 300) {
+        bar.value = 100;
+        say(body.message ?? "Uploaded.", "ok");
+        setTimeout(() => location.reload(), 1500);
+      } else {
+        bar.hidden = true;
+        say(body.error ?? `Upload failed (${xhr.status}).`, "bad");
+      }
+    };
+    xhr.onerror = () => { uploading = false; bar.hidden = true; say("Upload failed: network error.", "bad"); };
+    xhr.send(data);
+  }
+
+  input.addEventListener("change", () => send(input.files[0]));
+  form.addEventListener("submit", (e) => { e.preventDefault(); send(input.files[0]); });
+  for (const t of ["dragenter", "dragover"]) drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); });
+  for (const t of ["dragleave", "drop"]) drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); });
+  drop.addEventListener("drop", (e) => send(e.dataTransfer.files[0]));
+
+  document.getElementById("retry")?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    await fetch("/retry", { method: "POST" });
+    location.reload();
+  });
+</script>
+</body>
+</html>
