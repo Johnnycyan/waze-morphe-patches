@@ -72,17 +72,24 @@ The image is built by `.github/workflows/worker-image.yml` and published to
 
 ```bash
 cd worker
-printf 'GITHUB_TOKEN=github_pat_...\nUI_PASSWORD=choose-one\n' > .env
+printf 'GITHUB_TOKEN=github_pat_...
+UI_PASSWORD=choose-one
+' > .env
 docker compose up -d
 ```
 
-Open `http://<host>:8080`. The page refreshes itself when the state changes.
+Open `http://<host>:8080` and sign in with `UI_PASSWORD`. The page refreshes itself when the state
+changes. Uploads are sent in chunks (20 MB by default), so they work behind a Cloudflare Tunnel,
+which caps each request at 100 MB. An interrupted chunk is retried and resumed automatically.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `GITHUB_REPO` | required | `owner/name` of this repository |
 | `GITHUB_TOKEN` | required | token from step 2 |
-| `UI_PASSWORD` | empty | basic-auth password for the page; empty disables auth |
+| `UI_PASSWORD` | empty | password for the sign-in page; empty disables sign-in |
+| `COOKIE_SECURE` | empty | `1` sends the session cookie only over HTTPS. Set it if you only use the tunnel's HTTPS address, and leave it empty if you also open the page over plain HTTP on your LAN |
+| `UPLOAD_CHUNK_MB` | `20` | upload chunk size; keep it well under your proxy's request limit |
+| `SECRET_KEY` | generated | signs session cookies; generated into `/data/secret_key` when unset |
 | `POLL_SECONDS` | `600` | how often to check for a new candidate |
 | `WAZE_CERT_SHA256` | Waze's cert | expected signing certificate of uploads |
 

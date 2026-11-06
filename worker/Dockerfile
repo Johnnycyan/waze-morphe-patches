@@ -19,6 +19,7 @@ COPY requirements.txt .
 RUN python3 -m venv /venv && /venv/bin/pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY templates templates
+COPY static static
 
 ENV DATA_DIR=/data MORPHE_VERSION=${MORPHE_VERSION} JAVA_TOOL_OPTIONS=-Xmx3g
 VOLUME /data

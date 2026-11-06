@@ -1,6 +1,7 @@
 services:
-  worker:
+  waze-worker:
     image: ghcr.io/johnnycyan/waze-morphe-patches-worker:latest
+    container_name: waze-worker
     restart: unless-stopped
     ports:
       - "8080:8080"
@@ -8,7 +9,12 @@ services:
       GITHUB_REPO: Johnnycyan/waze-morphe-patches
       # Fine-grained token for this repository only: Contents read/write, Issues read/write.
       GITHUB_TOKEN: ${GITHUB_TOKEN:?set GITHUB_TOKEN in .env}
-      # Optional basic-auth password for the page (any username).
+      # Password for the sign-in page; leave empty to disable sign-in.
       UI_PASSWORD: ${UI_PASSWORD:-}
+      # 1 = session cookie over HTTPS only (tunnel-only access).
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
     volumes:
-      - ./data:/data
+      - waze-worker-data:/data
+
+volumes:
+  waze-worker-data:

@@ -5,135 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Waze Patches worker</title>
-<style>
-  :root {
-    color-scheme: dark;
-    --bg: #0e1116;
-    --card: #171b22;
-    --line: #262c36;
-    --text: #e6e9ef;
-    --muted: #8b94a3;
-    --accent: #33ccff;
-    --ok: #3ddc84;
-    --warn: #ffb547;
-    --bad: #ff5c6c;
-    --radius: 16px;
-    accent-color: var(--accent);
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  }
-  main {
-    max-width: 760px;
-    margin-inline: auto;
-    padding: 32px 16px 64px;
-    display: grid;
-    gap: 16px;
-  }
-  h1 { font-size: 1.35rem; margin: 0 0 4px; }
-  h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 12px; }
-  .sub { color: var(--muted); margin: 0; }
-  .card {
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 20px;
-  }
-  .version { font-size: 2.2rem; font-weight: 700; letter-spacing: -0.02em; margin: 0; }
-  .meta { color: var(--muted); font-size: 0.85rem; margin: 6px 0 0; overflow-wrap: anywhere; }
-  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
-  .btn {
-    display: inline-flex; align-items: center; gap: 8px;
-    padding: 10px 16px;
-    border-radius: 999px;
-    border: 1px solid var(--line);
-    background: #1f2530;
-    color: var(--text);
-    font: inherit; font-weight: 600;
-    text-decoration: none;
-    cursor: pointer;
-  }
-  .btn:hover { border-color: var(--accent); }
-  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #04121a; }
-  .pill {
-    display: inline-block;
-    padding: 4px 12px;
-    border-radius: 999px;
-    font-size: 0.8rem; font-weight: 700;
-    background: #222833; color: var(--muted);
-  }
-  .pill[data-phase="verified"] { background: rgb(61 220 132 / 0.15); color: var(--ok); }
-  .pill[data-phase="running"], .pill[data-phase="queued"] { background: rgb(51 204 255 / 0.15); color: var(--accent); }
-  .pill[data-phase="needs_apk"] { background: rgb(255 181 71 / 0.15); color: var(--warn); }
-  .pill[data-phase="failed"], .pill[data-phase="error"] { background: rgb(255 92 108 / 0.15); color: var(--bad); }
-
-  .drop {
-    display: grid; place-items: center; gap: 6px;
-    padding: 32px 16px;
-    border: 2px dashed var(--line);
-    border-radius: var(--radius);
-    text-align: center;
-    color: var(--muted);
-    cursor: pointer;
-    transition: border-color 0.15s, background 0.15s;
-  }
-  .drop:hover, .drop.over { border-color: var(--accent); background: rgb(51 204 255 / 0.05); }
-  .drop strong { color: var(--text); }
-  .drop input { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; }
-
-  progress {
-    appearance: none;
-    border: 0 solid;
-    overflow: clip;
-    inline-size: 100%;
-    block-size: 10px;
-    margin-top: 14px;
-    --progress-bar-radius: 1e5px;
-    border-radius: var(--progress-bar-radius);
-    background: #222833;
-  }
-  progress::-webkit-progress-bar { background: transparent; }
-  progress::-webkit-progress-value {
-    background: var(--accent);
-    border-radius: var(--progress-bar-radius);
-    transition: inline-size 0.3s;
-  }
-  progress::-moz-progress-bar {
-    background: var(--accent);
-    border-radius: var(--progress-bar-radius);
-    transition: inline-size 0.3s;
-  }
-  #upload-msg { margin: 10px 0 0; min-block-size: 1.5em; }
-  #upload-msg.bad { color: var(--bad); }
-  #upload-msg.ok { color: var(--ok); }
-
-  pre {
-    margin: 12px 0 0;
-    padding: 14px;
-    max-block-size: 320px;
-    overflow: auto;
-    background: #0b0e12;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
-    white-space: pre-wrap;
-  }
-  ul.files { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-  ul.files li { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; background: #1f2530; border-radius: 10px; }
-  ul.files span { color: var(--muted); }
-  a { color: var(--accent); }
-</style>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 <main>
   <header>
-    <h1>Waze Patches worker</h1>
-    <p class="sub">Upload the Waze build the next release needs. It's checked against Waze's signing certificate and test-patched before CI releases.</p>
+    <div>
+      <h1>Waze Patches worker</h1>
+      <p class="sub">Upload the Waze build the next release needs. It's checked against Waze's signing certificate and test-patched before CI releases.</p>
+    </div>
+    {% if auth %}
+    <form method="post" action="{{ url_for('logout') }}"><button class="btn small" type="submit">Sign out</button></form>
+    {% endif %}
   </header>
 
   <section class="card" aria-labelledby="needed-h">
@@ -160,14 +43,14 @@
 
   <section class="card" aria-labelledby="upload-h">
     <h2 id="upload-h">Upload</h2>
-    <form id="upload-form" action="/upload" method="post" enctype="multipart/form-data">
+    <form id="upload-form">
       <label class="drop" id="drop" for="apk">
         <strong>Drop the APKM here, or click to choose</strong>
         <span>.apkm, .apk, .xapk or .apks</span>
         <input type="file" id="apk" name="apk" accept=".apkm,.apk,.xapk,.apks" required>
       </label>
       <progress id="progress" max="100" value="0" aria-label="Upload progress" hidden></progress>
-      <p id="upload-msg" role="status" aria-live="polite"></p>
+      <p id="upload-msg" class="status" role="status" aria-live="polite"></p>
     </form>
   </section>
 
@@ -205,62 +88,96 @@
     error: "Worker error",
   };
   const phase = document.getElementById("phase");
-  const setPhase = (p) => { if (phase) { phase.dataset.phase = p; phase.textContent = LABELS[p] ?? p; } };
-  setPhase(phase?.dataset.phase);
+  if (phase) phase.textContent = LABELS[phase.dataset.phase] ?? phase.dataset.phase;
+
+  let uploading = false;
 
   // Reload when the phase changes so the job card and links stay current.
-  let last = phase?.dataset.phase;
+  const lastPhase = phase?.dataset.phase;
   setInterval(async () => {
     if (uploading) return;
     try {
-      const s = await (await fetch("/api/status")).json();
-      if (s.phase !== last) location.reload();
+      const res = await fetch("/api/status");
+      if (res.status === 401) return location.reload();
+      if ((await res.json()).phase !== lastPhase) location.reload();
     } catch {}
   }, 10000);
 
-  const form = document.getElementById("upload-form");
   const input = document.getElementById("apk");
   const drop = document.getElementById("drop");
   const bar = document.getElementById("progress");
   const msg = document.getElementById("upload-msg");
-  let uploading = false;
+  const say = (text, kind = "") => { msg.textContent = text; msg.className = `status ${kind}`; };
+  const mb = (n) => (n / 1048576).toFixed(0);
 
-  const say = (text, kind = "") => { msg.textContent = text; msg.className = kind; };
+  async function json(res) {
+    try { return await res.json(); } catch { return {}; }
+  }
 
-  function send(file) {
+  // One chunk as its own request; XHR so the bar moves within a chunk too.
+  function putChunk(id, offset, blob, total) {
+    return new Promise((resolve) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", `/upload/${id}?offset=${offset}`);
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.upload.onprogress = (e) => { bar.value = ((offset + e.loaded) / total) * 100; };
+      xhr.onload = () => {
+        let body = {};
+        try { body = JSON.parse(xhr.responseText); } catch {}
+        resolve({ status: xhr.status, body });
+      };
+      xhr.onerror = () => resolve({ status: 0, body: {} });
+      xhr.send(blob);
+    });
+  }
+
+  async function send(file) {
     if (!file || uploading) return;
     uploading = true;
-    const data = new FormData();
-    data.append("apk", file);
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/upload");
     bar.hidden = false;
-    bar.removeAttribute("value"); // indeterminate until the first progress event
-    say(`Uploading ${file.name}…`);
-    xhr.upload.onprogress = (e) => {
-      if (!e.lengthComputable) return;
-      bar.value = Math.round((e.loaded / e.total) * 100);
-      if (e.loaded === e.total) say("Checking package and signature…");
-    };
-    xhr.onload = () => {
-      uploading = false;
-      let body = {};
-      try { body = JSON.parse(xhr.responseText); } catch {}
-      if (xhr.status < 300) {
-        bar.value = 100;
-        say(body.message ?? "Uploaded.", "ok");
-        setTimeout(() => location.reload(), 1500);
-      } else {
-        bar.hidden = true;
-        say(body.error ?? `Upload failed (${xhr.status}).`, "bad");
+    bar.removeAttribute("value");
+    say(`Starting upload of ${file.name}…`);
+    try {
+      let res = await fetch("/upload/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: file.name, size: file.size }),
+      });
+      let body = await json(res);
+      if (!res.ok) throw new Error(body.error ?? `Upload refused (${res.status}).`);
+      const { id, chunk_bytes: size } = body;
+
+      let offset = 0, failures = 0;
+      while (offset < file.size) {
+        say(`Uploading ${file.name}: ${mb(offset)} of ${mb(file.size)} MB`);
+        const r = await putChunk(id, offset, file.slice(offset, offset + size), file.size);
+        if (r.status === 200) { offset = r.body.offset; failures = 0; continue; }
+        if (r.status === 409 && Number.isInteger(r.body.offset)) { offset = r.body.offset; continue; }
+        if (r.status === 401) throw new Error("Signed out. Reload the page and sign in.");
+        if (r.status && r.status < 500 && r.status !== 429) throw new Error(r.body.error ?? `Upload failed (${r.status}).`);
+        if (++failures > 5) throw new Error("Upload failed after several retries. Check the connection and try again.");
+        say(`Connection hiccup, retrying (${failures}/5)…`);
+        await new Promise((ok) => setTimeout(ok, 1000 * 2 ** failures));
       }
-    };
-    xhr.onerror = () => { uploading = false; bar.hidden = true; say("Upload failed: network error.", "bad"); };
-    xhr.send(data);
+
+      bar.value = 100;
+      say("Checking package and signature…");
+      res = await fetch(`/upload/${id}/finish`, { method: "POST" });
+      body = await json(res);
+      if (!res.ok) throw new Error(body.error ?? `Upload failed (${res.status}).`);
+      say(body.message ?? "Uploaded.", "ok");
+      setTimeout(() => location.reload(), 1500);
+    } catch (e) {
+      bar.hidden = true;
+      say(e.message, "bad");
+    } finally {
+      uploading = false;
+      input.value = "";
+    }
   }
 
   input.addEventListener("change", () => send(input.files[0]));
-  form.addEventListener("submit", (e) => { e.preventDefault(); send(input.files[0]); });
+  document.getElementById("upload-form").addEventListener("submit", (e) => { e.preventDefault(); send(input.files[0]); });
   for (const t of ["dragenter", "dragover"]) drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add("over"); });
   for (const t of ["dragleave", "drop"]) drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); });
   drop.addEventListener("drop", (e) => send(e.dataTransfer.files[0]));

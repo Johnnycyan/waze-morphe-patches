@@ -10,9 +10,11 @@ and leaves decompiled sources here for the fingerprint fix.
 import base64
 import datetime as dt
 import hashlib
+import hmac
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -24,7 +26,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
-from flask import Flask, Response, abort, jsonify, render_template, request, send_file
+from flask import Flask, abort, jsonify, redirect, render_template, request, send_file, session, url_for
 
 REPO = os.environ["GITHUB_REPO"]
 TOKEN = os.environ["GITHUB_TOKEN"]
@@ -39,6 +41,9 @@ UI_PASSWORD = os.environ.get("UI_PASSWORD", "")
 MORPHE_JAR = os.environ.get("MORPHE_JAR", "/opt/morphe/morphe.jar")
 JADX = os.environ.get("JADX", "/opt/jadx/bin/jadx")
 MORPHE_VERSION = os.environ.get("MORPHE_VERSION", "unknown")
+CHUNK_BYTES = int(os.environ.get("UPLOAD_CHUNK_MB", "20")) * 1024 * 1024
+MAX_UPLOAD = 2 * 1024**3
+UPLOAD_EXTS = (".apk", ".apkm", ".xapk", ".apks")
 
 APKS = DATA / "apks"
 JOBS = DATA / "jobs"
@@ -47,7 +52,6 @@ for d in (APKS, JOBS, INCOMING):
     d.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 2 * 1024**3
 
 lock = threading.Lock()
 state = {"candidate": None, "verified": False, "error": None, "checked_at": None}
@@ -315,22 +319,79 @@ def maybe_start(force=False):
     return True
 
 
+def sweep_incoming():
+    """Drops uploads that were abandoned more than a day ago."""
+    cutoff = time.time() - 86400
+    for f in INCOMING.iterdir():
+        if f.stat().st_mtime < cutoff:
+            f.unlink(missing_ok=True)
+
+
 def poller():
     while True:
         refresh()
+        sweep_incoming()
         time.sleep(POLL_SECONDS)
 
 
 # --- Web ---------------------------------------------------------------------
 
+def _secret_key():
+    if os.environ.get("SECRET_KEY"):
+        return os.environ["SECRET_KEY"]
+    f = DATA / "secret_key"
+    if not f.exists():
+        f.write_text(secrets.token_hex(32))
+        f.chmod(0o600)
+    return f.read_text().strip()
+
+
+app.secret_key = _secret_key()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    # Lax keeps the cookie off cross-site POSTs, which covers CSRF for this single-user page.
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.environ.get("COOKIE_SECURE", "") == "1",
+    PERMANENT_SESSION_LIFETIME=dt.timedelta(days=30),
+)
+# Sessions carry a digest of the password, so changing UI_PASSWORD signs everyone out.
+_PASSWORD_TAG = hmac.new(app.secret_key.encode(), UI_PASSWORD.encode(), hashlib.sha256).hexdigest()[:32]
+
+
 @app.before_request
 def auth():
-    if not UI_PASSWORD:
+    if not UI_PASSWORD or request.endpoint in ("login", "static"):
         return None
-    a = request.authorization
-    if not a or a.password != UI_PASSWORD:
-        return Response("Login required", 401, {"WWW-Authenticate": 'Basic realm="waze-worker"'})
-    return None
+    if session.get("auth") == _PASSWORD_TAG:
+        return None
+    if request.method != "GET" or request.path.startswith("/api/"):
+        return jsonify(error="Signed out. Reload the page and sign in."), 401
+    return redirect(url_for("login", next=request.full_path.rstrip("?")))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not UI_PASSWORD:
+        return redirect("/")
+    nxt = request.values.get("next", "/")
+    # Local paths only; browsers treat "//host" and "/\host" as another site.
+    if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt:
+        nxt = "/"
+    if request.method == "GET":
+        return render_template("login.html", error=None, next=nxt)
+    if not hmac.compare_digest(request.form.get("password", "").encode(), UI_PASSWORD.encode()):
+        time.sleep(1)  # slows guessing
+        return render_template("login.html", error="Wrong password.", next=nxt), 401
+    session.clear()
+    session.permanent = True
+    session["auth"] = _PASSWORD_TAG
+    return redirect(nxt)
+
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 def apkmirror_links(version):
@@ -373,7 +434,7 @@ def view_state():
 
 @app.get("/")
 def index():
-    return render_template("index.html", s=view_state())
+    return render_template("index.html", s=view_state(), chunk_bytes=CHUNK_BYTES, auth=bool(UI_PASSWORD))
 
 
 @app.get("/api/status")
@@ -381,16 +442,60 @@ def status():
     return jsonify(view_state())
 
 
-@app.post("/upload")
-def upload():
-    f = request.files.get("apk")
-    if not f or not f.filename:
-        return jsonify(error="No file received."), 400
-    ext = Path(f.filename).suffix.lower()
-    if ext not in (".apk", ".apkm", ".xapk", ".apks"):
+# Uploads arrive in chunks so each request stays under a reverse proxy's body limit
+# (Cloudflare: 100 MB) and finishes well inside its ~100 s timeout.
+
+def _upload_paths(upload_id):
+    if not re.fullmatch(r"[0-9a-f]{32}", upload_id):
+        abort(404)
+    meta, part = INCOMING / f"{upload_id}.json", INCOMING / f"{upload_id}.part"
+    if not meta.exists() or not part.exists():
+        abort(404)
+    return json.loads(meta.read_text()), part
+
+
+@app.post("/upload/start")
+def upload_start():
+    body = request.get_json(silent=True) or {}
+    name, size = str(body.get("name", "")), body.get("size")
+    ext = Path(name).suffix.lower()
+    if ext not in UPLOAD_EXTS:
         return jsonify(error="Upload an .apk, .apkm, .xapk or .apks file."), 400
-    tmp = INCOMING / f"{uuid.uuid4().hex}{ext}"
-    f.save(tmp)
+    if not isinstance(size, int) or not 0 < size <= MAX_UPLOAD:
+        return jsonify(error="File size is missing or too large."), 400
+    upload_id = uuid.uuid4().hex
+    (INCOMING / f"{upload_id}.json").write_text(json.dumps({"ext": ext, "size": size, "created": time.time()}))
+    (INCOMING / f"{upload_id}.part").touch()
+    return jsonify(id=upload_id, chunk_bytes=CHUNK_BYTES)
+
+
+@app.put("/upload/<upload_id>")
+def upload_chunk(upload_id):
+    meta, part = _upload_paths(upload_id)
+    offset = request.args.get("offset", type=int)
+    have = part.stat().st_size
+    if offset != have:  # lost or repeated chunk: tell the client where to resume
+        return jsonify(error="Offset mismatch.", offset=have), 409
+    written = 0
+    with open(part, "ab") as out:
+        while chunk := request.stream.read(1 << 20):
+            written += len(chunk)
+            if written > CHUNK_BYTES or have + written > meta["size"]:
+                out.truncate(have)
+                return jsonify(error="Chunk too large."), 413
+            out.write(chunk)
+    return jsonify(offset=have + written)
+
+
+@app.post("/upload/<upload_id>/finish")
+def upload_finish(upload_id):
+    meta, part = _upload_paths(upload_id)
+    if part.stat().st_size != meta["size"]:
+        return jsonify(error="Upload incomplete.", offset=part.stat().st_size), 409
+    ext = meta["ext"]
+    tmp = INCOMING / f"{upload_id}{ext}"
+    part.rename(tmp)
+    (INCOMING / f"{upload_id}.json").unlink(missing_ok=True)
     try:
         with tempfile.TemporaryDirectory(dir=DATA) as work:
             version, code, _ = inspect(tmp, Path(work))
@@ -430,4 +535,5 @@ threading.Thread(target=poller, daemon=True).start()
 if __name__ == "__main__":
     from waitress import serve
 
-    serve(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")), max_request_body_size=2 * 1024**3)
+    serve(app, host="0.0.0.0", port=int(os.environ.get("PORT", "8080")),
+          max_request_body_size=CHUNK_BYTES + (1 << 20))
