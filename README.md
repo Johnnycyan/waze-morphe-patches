@@ -72,9 +72,7 @@ The image is built by `.github/workflows/worker-image.yml` and published to
 
 ```bash
 cd worker
-printf 'GITHUB_TOKEN=github_pat_...
-UI_PASSWORD=choose-one
-' > .env
+printf 'GITHUB_TOKEN=github_pat_...\nUI_PASSWORD=choose-one\n' > .env
 docker compose up -d
 ```
 
