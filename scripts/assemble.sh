@@ -59,9 +59,14 @@ grep -rl 'extensions/extension.mpe' patches/src/main/kotlin/app "extensions/$TTS
 # Retarget the TTS patch to the Waze version the NL patches support. git apply refuses on any
 # mismatch, so an upstream TTS change touching the same lines fails the build instead of
 # silently shipping fingerprints for the wrong Waze version.
+# build/combined lives inside this repository's checkout, where git apply would resolve paths
+# against the outer repo and silently skip them; its own repo makes it patch this tree.
+git init -q .
 for p in "$ROOT"/overlay/*.patch; do
     [[ -e "$p" ]] || continue
     git apply --verbose "$p"
+    # Proves every hunk landed: only an applied patch reverses cleanly.
+    git apply --reverse --check "$p" || { echo "overlay $(basename "$p") did not apply" >&2; exit 1; }
 done
 
 # --- Bundle identity ---------------------------------------------------------
