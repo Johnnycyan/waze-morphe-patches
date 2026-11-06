@@ -28,8 +28,6 @@ permissions:
 
 env:
   GH_TOKEN: ${{ github.token }}
-  # NL's build generates a Buienalarm key file even though that patch is pruned here.
-  SHARED_MAPS_API_KEY: AIzaSyDOCSGATEPLACEHOLDER00000000000000
 
 jobs:
   pipeline:
@@ -88,10 +86,7 @@ jobs:
           done
           bash scripts/assemble.sh "$version"
           waze="$(cat build/waze-version.txt)"
-          (cd build/combined && chmod +x gradlew && ./gradlew generatePatchesList --no-daemon)
-          mkdir -p out
-          cp "build/combined/patches/build/libs/patches-$version.mpp" out/patches.mpp
-          cp build/combined/patches-list.json out/patches-list.json
+          bash scripts/build.sh "$version"
 
           . <(grep -E '^[A-Z_]+=' upstream.lock)
           jq -n --arg key "$KEY" --arg version "$version" --arg waze "$waze" \

@@ -35,7 +35,7 @@ upstream release ──► pipeline.yml ──► "candidate" prerelease ──�
 4. **Release**: the push of `verified/<key>.json` re-runs the pipeline, which publishes
    `v<nl>-tts.<tts>` and updates `patches-bundle.json` / `patches-list.json`.
 
-`<key>` is a hash of `upstream.lock`, `scripts/assemble.sh` and `overlay/`, so a verification
+`<key>` is a hash of `upstream.lock`, `scripts/assemble.sh`, `scripts/build.sh` and `overlay/`, so a verification
 only ever covers the exact inputs it was run against.
 
 ### Why the TTS patch is overlaid
@@ -97,8 +97,7 @@ Uploaded APKs are kept in `worker/data/apks`. They are never committed or publis
 
 ```bash
 bash scripts/assemble.sh 0.0.0-dev
-cd build/combined && SHARED_MAPS_API_KEY=AIzaSyDOCSGATEPLACEHOLDER00000000000000 ./gradlew generatePatchesList
+bash scripts/build.sh 0.0.0-dev
 ```
 
-The placeholder key is needed only because NL's build always generates a Buienalarm key file.
-Buienalarm itself isn't part of this bundle.
+The bundle lands in `out/patches.mpp`.

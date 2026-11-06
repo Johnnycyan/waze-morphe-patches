@@ -7,3 +7,4 @@
 *.apkm
 *.apks
 *.xapk
+/out/
