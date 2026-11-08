@@ -1,5 +1,5 @@
 # Pinned upstream releases. Updated by .github/workflows/sync.yml; edit by hand to pin.
 NL_REPO=https://gitlab.com/johninnld/nl-morphe-patches.git
-NL_TAG=v1.53.10
+NL_TAG=v1.56.1
 TTS_REPO=https://github.com/CasketPizza/morphe-waze-system-tts.git
 TTS_TAG=v1.2.0
