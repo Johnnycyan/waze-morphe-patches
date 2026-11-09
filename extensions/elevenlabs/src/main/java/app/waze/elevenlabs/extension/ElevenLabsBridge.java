@@ -5,7 +5,6 @@ import android.content.Context;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.SystemClock;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.View;
@@ -42,14 +41,6 @@ public final class ElevenLabsBridge {
         protected boolean removeEldestEntry(Map.Entry<String, String> e) { return size() > 2048; }
     };
     private static final Map<Integer, Pending> JOBS = new LinkedHashMap<>();
-    // When another patch completes our handed-off audio without playing it (nl-morphe-patches'
-    // startup mute does), Waze can ask for the same phrase again at once, and every round trip
-    // through us re-queues it: the main thread spins and Waze freezes. A phrase asked for again
-    // this soon after we played it goes to Waze's own path instead.
-    private static final long REPEAT_MS = 1500;
-    private static final Map<String, Long> RECENT = new LinkedHashMap<String, Long>() {
-        protected boolean removeEldestEntry(Map.Entry<String, Long> e) { return size() > 64; }
-    };
     private static final AtomicInteger IDS = new AtomicInteger();
     private static final ThreadLocal<Boolean> BYPASS = new ThreadLocal<>();
     private static volatile Context context;
@@ -143,15 +134,6 @@ public final class ElevenLabsBridge {
     }
 
     private static boolean enqueue(Pending pending) {
-        long now = SystemClock.elapsedRealtime();
-        synchronized (RECENT) {
-            Long last = RECENT.get(pending.text);
-            if (last != null && now - last < REPEAT_MS) {
-                Log.w(TAG, "Repeated within " + REPEAT_MS + " ms, leaving to Waze: " + pending.kind + " \"" + pending.text + "\"");
-                return false;
-            }
-            RECENT.put(pending.text, now);
-        }
         Log.i(TAG, "Queued " + pending.kind + " #" + pending.id + " \"" + pending.text + "\"");
         File cacheDir = context.getCacheDir();
         MAIN.post(() -> {
