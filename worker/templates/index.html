@@ -24,7 +24,7 @@
     {% if s.candidate %}
       <p class="version">Waze {{ s.candidate.waze_version }}</p>
       <p class="meta">
-        Bundle {{ s.candidate.version }} · nl {{ s.candidate.nl_tag }} · tts {{ s.candidate.tts_tag }} · inputs {{ s.candidate.key }}
+        Bundle {{ s.candidate.version }} · nl {{ s.candidate.nl_tag }} · inputs {{ s.candidate.key }}
       </p>
       <div class="row">
         <span class="pill" id="phase" data-phase="{{ s.phase }}" role="status"></span>
@@ -84,7 +84,7 @@
     queued: "APK stored, starting",
     running: "Verifying…",
     verified: "Verified, CI is releasing",
-    failed: "TTS patch failed, see issue",
+    failed: "Patch failed, see issue",
     error: "Worker error",
   };
   const phase = document.getElementById("phase");

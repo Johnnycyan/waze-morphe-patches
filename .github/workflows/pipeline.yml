@@ -1,8 +1,7 @@
 name: Sync, build and release
 
-# 1. Point upstream.lock at the newest nl-morphe-patches and morphe-waze-system-tts releases.
-# 2. Build the combined bundle and publish it as the "candidate" prerelease, with the Waze
-#    version it needs. The worker (worker/) waits for that APK to be uploaded, test-patches it
+# 1. Point upstream.lock at the newest Waze version nl-morphe-patches targets.
+# 2. Build the bundle for that Waze version and publish it as the "candidate" prerelease. The worker (worker/) waits for that APK to be uploaded, test-patches it
 #    and commits verified/<key>.json.
 # 3. Once the candidate's inputs are verified, publish that exact bundle as a release and update
 #    patches-bundle.json, which Morphe Manager reads.
@@ -14,7 +13,12 @@ on:
     branches: [main]
     paths:
       - upstream.lock
-      - overlay/**
+      - VERSION
+      - patches/**
+      - extensions/**
+      - gradle/**
+      - "*.kts"
+      - gradle.properties
       - scripts/**
       - verified/**
       - .github/workflows/pipeline.yml
@@ -46,7 +50,7 @@ jobs:
         run: |
           if [ "$(bash scripts/sync.sh)" = changed ]; then
             . <(grep -E '^[A-Z_]+=' upstream.lock)
-            git commit -am "chore: track nl $NL_TAG, tts $TTS_TAG"
+            git commit -am "chore: target Waze $WAZE_VERSION (nl $NL_TAG)"
             git pull --rebase origin main
             git push origin HEAD:main
           fi
@@ -79,19 +83,18 @@ jobs:
           KEY: ${{ steps.meta.outputs.KEY }}
           BASE_VERSION: ${{ steps.meta.outputs.BASE_VERSION }}
         run: |
-          # Same upstream tags rebuilt with a changed overlay get a .N suffix.
+          # Rebuilds for the same VERSION and Waze version get a .N suffix.
           version="$BASE_VERSION"; n=1
           while git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; do
             n=$((n + 1)); version="$BASE_VERSION.$n"
           done
-          bash scripts/assemble.sh "$version"
-          waze="$(cat build/waze-version.txt)"
           bash scripts/build.sh "$version"
 
           . <(grep -E '^[A-Z_]+=' upstream.lock)
+          waze="$WAZE_VERSION"
           jq -n --arg key "$KEY" --arg version "$version" --arg waze "$waze" \
-                --arg nl "$NL_TAG" --arg tts "$TTS_TAG" --arg commit "$GITHUB_SHA" \
-                '{key: $key, version: $version, waze_version: $waze, nl_tag: $nl, tts_tag: $tts, commit: $commit}' \
+                --arg nl "$NL_TAG" --arg commit "$GITHUB_SHA" \
+                '{key: $key, version: $version, waze_version: $waze, nl_tag: $nl, commit: $commit}' \
                 > out/candidate.json
           gh release delete candidate --yes --cleanup-tag 2>/dev/null || true
           gh release create candidate --prerelease --target "$GITHUB_SHA" \
@@ -115,14 +118,12 @@ jobs:
           VERSION="$(jq -r .version out/candidate.json)"
           WAZE="$(jq -r .waze_version out/candidate.json)"
           NL_TAG="$(jq -r .nl_tag out/candidate.json)"
-          TTS_TAG="$(jq -r .tts_tag out/candidate.json)"
           mpp="patches-$VERSION.mpp"
           mv out/patches.mpp "out/$mpp"
           {
-            echo "Waze patches for Waze $WAZE, verified against the real APK."
+            echo "ElevenLabs voice for Waze $WAZE, verified against the real APK."
             echo
-            echo "- nl-morphe-patches [$NL_TAG](https://gitlab.com/johninnld/nl-morphe-patches/-/releases/$NL_TAG)"
-            echo "- morphe-waze-system-tts [$TTS_TAG](https://github.com/CasketPizza/morphe-waze-system-tts/releases/tag/$TTS_TAG)"
+            echo "- Waze version as targeted by nl-morphe-patches [$NL_TAG](https://gitlab.com/johninnld/nl-morphe-patches/-/releases/$NL_TAG)"
             echo "- verification: verified/$KEY.json"
             echo
             echo "inputs: $KEY"

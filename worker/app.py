@@ -35,7 +35,7 @@ DATA = Path(os.environ.get("DATA_DIR", "/data"))
 WAZE_CERT = os.environ.get(
     "WAZE_CERT_SHA256", "03637f6c5d8f604e6fdb79a6ffbfa578de4e318f8da22fc6106665247f8807d7"
 ).lower()
-TTS_PATCH = os.environ.get("TTS_PATCH_NAME", "Use Android system TTS for navigation")
+PATCH = os.environ.get("PATCH_NAME", "ElevenLabs voice for navigation")
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "600"))
 UI_PASSWORD = os.environ.get("UI_PASSWORD", "")
 MORPHE_JAR = os.environ.get("MORPHE_JAR", "/opt/morphe/morphe.jar")
@@ -203,7 +203,7 @@ def verify(cand):
         gh_download(cand["mpp_asset"], mpp)
         with open(log, "w") as out:
             proc = subprocess.run(
-                ["java", "-jar", MORPHE_JAR, "patch", "-p", str(mpp), "--exclusive", "-e", TTS_PATCH,
+                ["java", "-jar", MORPHE_JAR, "patch", "-p", str(mpp), "--exclusive", "-e", PATCH,
                  "--unsigned", "-r", str(d / "result.json"), "-t", str(d / "tmp"), "-o", str(d / "patched.apk"),
                  str(apk)],
                 stdout=out, stderr=subprocess.STDOUT, timeout=3600,
@@ -215,7 +215,7 @@ def verify(cand):
         if ok:
             record = {
                 "ok": True, "key": key, "version": cand["version"], "waze_version": cand["waze_version"],
-                "nl_tag": cand["nl_tag"], "tts_tag": cand["tts_tag"], "commit": cand["commit"],
+                "nl_tag": cand["nl_tag"], "commit": cand["commit"],
                 "apk_sha256": sha256(apk), "signing_cert_sha256": WAZE_CERT,
                 "morphe": MORPHE_VERSION, "verified_at": now(),
             }
@@ -241,12 +241,12 @@ def patch_succeeded(result: Path):
         data = json.loads(result.read_text())
     except (OSError, json.JSONDecodeError):
         return False
-    return data.get("success") is True and TTS_PATCH in data.get("appliedPatches", []) \
+    return data.get("success") is True and PATCH in data.get("appliedPatches", []) \
         and not data.get("failedPatches")
 
 
 def diagnostics(apk: Path, d: Path):
-    """Decompiles the sound and settings code the TTS fingerprints target, for the fix."""
+    """Decompiles the sound and settings code the patch fingerprints target, for the fix."""
     with tempfile.TemporaryDirectory(dir=DATA) as tmp:
         work = Path(tmp)
         base = apk
@@ -271,10 +271,10 @@ def open_issue(cand, tail):
         if issue["title"] == title:
             return issue["html_url"]
     body = (
-        f"The TTS patch did not apply to Waze {cand['waze_version']}.\n\n"
-        f"- inputs: `{cand['key']}`\n- nl: {cand['nl_tag']}, tts: {cand['tts_tag']}\n"
+        f"The ElevenLabs patch did not apply to Waze {cand['waze_version']}.\n\n"
+        f"- inputs: `{cand['key']}`\n- Waze target from nl {cand['nl_tag']}\n"
         f"- Decompiled `com/waze/sound` and `com/waze/settings`: download `diagnostics.zip` from the worker page.\n\n"
-        f"Fix the fingerprints in `overlay/`, push, and the next candidate is verified automatically.\n\n"
+        f"Fix the fingerprints in `patches/src/main/kotlin/app/waze/elevenlabs/Fingerprints.kt`, push, and the next candidate is verified automatically.\n\n"
         f"<details><summary>Morphe log (tail)</summary>\n\n```\n{tail}\n```\n</details>\n"
     )
     return gh("POST", f"/repos/{REPO}/issues", {"title": title, "body": body})["html_url"]
