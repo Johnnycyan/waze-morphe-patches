@@ -38,6 +38,8 @@ WAZE_CERT = os.environ.get(
 PATCH = os.environ.get("PATCH_NAME", "ElevenLabs voice for navigation")
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "600"))
 UI_PASSWORD = os.environ.get("UI_PASSWORD", "")
+# Lets the pipeline announce a new candidate instead of waiting for the next poll; empty disables it.
+NOTIFY_TOKEN = os.environ.get("NOTIFY_TOKEN", "")
 MORPHE_JAR = os.environ.get("MORPHE_JAR", "/opt/morphe/morphe.jar")
 JADX = os.environ.get("JADX", "/opt/jadx/bin/jadx")
 MORPHE_VERSION = os.environ.get("MORPHE_VERSION", "unknown")
@@ -360,7 +362,8 @@ _PASSWORD_TAG = hmac.new(app.secret_key.encode(), UI_PASSWORD.encode(), hashlib.
 
 @app.before_request
 def auth():
-    if not UI_PASSWORD or request.endpoint in ("login", "static"):
+    # notify authenticates with its own token, not a browser session.
+    if not UI_PASSWORD or request.endpoint in ("login", "static", "notify"):
         return None
     if session.get("auth") == _PASSWORD_TAG:
         return None
@@ -512,6 +515,20 @@ def upload_finish(upload_id):
     wanted = cand["waze_version"] if cand else None
     note = "" if version == wanted else f" The candidate needs {wanted}, so it was stored but not tested."
     return jsonify(message=f"Stored Waze {version} ({code}).{' Verification started.' if started else ''}{note}")
+
+
+@app.post("/api/notify")
+def notify():
+    """Called by the pipeline after it publishes a candidate: check now instead of at the next poll."""
+    if not NOTIFY_TOKEN:
+        abort(404)
+    sent = request.headers.get("Authorization", "")
+    if not hmac.compare_digest(sent.encode(), f"Bearer {NOTIFY_TOKEN}".encode()):
+        time.sleep(1)
+        return jsonify(error="Invalid token"), 401
+    # refresh() calls GitHub; answer at once and let it run.
+    threading.Thread(target=refresh, daemon=True).start()
+    return jsonify(accepted=True), 202
 
 
 @app.post("/retry")

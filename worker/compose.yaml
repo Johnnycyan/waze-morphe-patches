@@ -13,6 +13,8 @@ services:
       UI_PASSWORD: ${UI_PASSWORD:-}
       # 1 = session cookie over HTTPS only (tunnel-only access).
       COOKIE_SECURE: ${COOKIE_SECURE:-}
+      # Same value as the WORKER_NOTIFY_TOKEN repository secret; lets CI announce new candidates.
+      NOTIFY_TOKEN: ${NOTIFY_TOKEN:-}
     volumes:
       - waze-worker-data:/data
 

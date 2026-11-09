@@ -102,6 +102,21 @@ jobs:
             --notes "Awaiting verification against Waze $waze. Upload that APK to the worker. inputs: $KEY" \
             out/patches.mpp out/patches-list.json out/candidate.json
 
+      # Optional: tell the worker now instead of at its next poll. Polling still covers a miss.
+      - name: Notify worker
+        if: steps.meta.outputs.released != 'true' && steps.meta.outputs.verified != 'true'
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          WORKER_NOTIFY_TOKEN: ${{ secrets.WORKER_NOTIFY_TOKEN }}
+        run: |
+          if [ -z "$WORKER_URL" ] || [ -z "$WORKER_NOTIFY_TOKEN" ]; then
+            echo "WORKER_URL / WORKER_NOTIFY_TOKEN not set; the worker will pick the candidate up when it polls."
+            exit 0
+          fi
+          curl -fsS --max-time 30 -X POST -H "Authorization: Bearer $WORKER_NOTIFY_TOKEN" \
+            "${WORKER_URL%/}/api/notify" \
+            || echo "::warning::Could not reach the worker; it will pick the candidate up when it polls."
+
       # Publishes the exact bundle the worker verified, not a rebuild.
       - name: Release verified candidate
         if: steps.meta.outputs.released != 'true' && steps.meta.outputs.verified == 'true'

@@ -113,8 +113,23 @@ default), so they work behind a Cloudflare Tunnel, which caps each request at 10
 | `UPLOAD_CHUNK_MB` | `20` | upload chunk size; keep it well under your proxy's request limit |
 | `SECRET_KEY` | generated | signs session cookies; generated into `/data/secret_key` when unset |
 | `POLL_SECONDS` | `600` | how often to check for a new candidate |
+| `NOTIFY_TOKEN` | empty | lets the pipeline announce a new candidate at once (see below); empty disables `/api/notify` |
 | `PATCH_NAME` | `ElevenLabs voice for navigation` | patch the worker applies to verify |
 | `WAZE_CERT_SHA256` | Waze's cert | expected signing certificate of uploads |
+
+### 4. Instant verification (optional)
+
+By default the worker finds a new candidate at its next poll. To have the pipeline tell it right
+away, pick a long random token and set it in both places:
+
+- worker: `NOTIFY_TOKEN=<token>`
+- repository secrets (Settings → Secrets and variables → Actions): `WORKER_NOTIFY_TOKEN=<token>`
+  and `WORKER_URL=https://<your worker's public address>`
+
+After publishing a candidate, the pipeline sends `POST <WORKER_URL>/api/notify` with
+`Authorization: Bearer <token>`. If the worker is unreachable, the run only logs a warning and the
+next poll picks the candidate up. A Cloudflare Access policy in front of the worker blocks this
+call unless `/api/notify` is exempted from it.
 
 Uploaded APKs are kept in the worker's `/data/apks`. They are never committed or published.
 
