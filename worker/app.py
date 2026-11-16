@@ -176,7 +176,8 @@ def badging(apk: Path):
 def cert_digests(apk: Path):
     out = run(["apksigner", "verify", "--print-certs", str(apk)])
     if out.returncode != 0:
-        raise ValueError(f"{apk.name}: signature does not verify")
+        errors = [l for l in (out.stdout + out.stderr).splitlines() if l.startswith("ERROR")]
+        raise ValueError(f"{apk.name}: signature does not verify" + (f" ({errors[0]})" if errors else ""))
     # App signers only: "Signer #1 ..." or, with key rotation, "Signer (minSdkVersion=...) ...".
     # Play-delivered APKs also carry a Google "Source Stamp" signer, which this skips.
     return set(re.findall(r"^Signer (?:#\d+|\([^)]*\)) certificate SHA-256 digest: ([0-9a-f]{64})",
