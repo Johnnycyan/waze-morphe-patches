@@ -23,7 +23,7 @@ sources to Morphe Manager and patch each app with patches from both in one go.
    - Turn on **Use ElevenLabs for navigation voice**.
    - Enter your ElevenLabs **API key**.
    - Pick a voice with **Choose from my voices**, or paste any **Voice ID**.
-   - The **model** defaults to `eleven_flash_v2_5`, ElevenLabs' fastest model. **Choose model** lists
+   - The **model** defaults to `eleven_v4_turbo`. **Choose model** lists
      the others.
    - **Stability**, **Similarity** and **Speed** are ElevenLabs' voice settings.
    - Tap **Test voice** to hear a sample, then tap **Save**.

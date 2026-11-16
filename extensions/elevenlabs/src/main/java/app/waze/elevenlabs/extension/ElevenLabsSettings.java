@@ -22,7 +22,7 @@ import java.util.Locale;
 /** Stored configuration and the settings dialog opened from Waze's settings. */
 final class ElevenLabsSettings {
     private static final String PREFS = "elevenlabs_voice";
-    static final String DEFAULT_MODEL = "eleven_flash_v2_5";
+    static final String DEFAULT_MODEL = "eleven_v4_turbo";
     private static final String SAMPLE = "In two hundred meters, turn left onto Main Street.";
 
     private ElevenLabsSettings() {}
