@@ -33,6 +33,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class ElevenLabsBridge {
     private static final String TAG = "WazeElevenLabs";
+    private static final String WAZE_NOTE = "In Voice & sound → Waze voice, pick a voice marked “Including street names”. "
+            + "Only those voices give Waze the instruction text that ElevenLabs reads out.";
     private static final long TIMEOUT_MS = 9000;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     // One thread: utterances are synthesized in the order Waze asked for them.
@@ -64,6 +66,8 @@ public final class ElevenLabsBridge {
     }
 
     static String status() { return status; }
+
+    static void report(String value) { status = value; }
 
     static void background(Runnable task) { NETWORK.execute(task); }
 
@@ -275,7 +279,7 @@ public final class ElevenLabsBridge {
         summary.setText(ElevenLabsSettings.summary(activity));
         row.addView(title);
         row.addView(summary);
-        row.setOnClickListener(v -> ElevenLabsSettings.show(activity,
+        row.setOnClickListener(v -> ElevenLabsSettings.show(activity, WAZE_NOTE,
                 () -> summary.setText(ElevenLabsSettings.summary(activity))));
         return row;
     }

@@ -4,15 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Waze Patches worker</title>
+<title>Patches worker</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
 <main>
   <header>
     <div>
-      <h1>Waze Patches worker</h1>
-      <p class="sub">Upload the Waze build the next release needs. It's checked against Waze's signing certificate and test-patched before CI releases.</p>
+      <h1>Patches worker</h1>
+      <p class="sub">Upload the Waze and Google Maps builds the next release needs. Each is checked against the app's signing certificate, and the bundle is test-patched onto both before CI releases.</p>
     </div>
     {% if auth %}
     <form method="post" action="{{ url_for('logout') }}"><button class="btn small" type="submit">Sign out</button></form>
@@ -22,17 +22,28 @@
   <section class="card" aria-labelledby="needed-h">
     <h2 id="needed-h">Needed now</h2>
     {% if s.candidate %}
-      <p class="version">Waze {{ s.candidate.waze_version }}</p>
       <p class="meta">
         Bundle {{ s.candidate.version }} · nl {{ s.candidate.nl_tag }} · inputs {{ s.candidate.key }}
       </p>
       <div class="row">
         <span class="pill" id="phase" data-phase="{{ s.phase }}" role="status"></span>
       </div>
-      <div class="row">
-        <a class="btn primary" href="{{ s.links.release }}" target="_blank" rel="noopener noreferrer">Open on APKMirror</a>
-        <a class="btn" href="{{ s.links.search }}" target="_blank" rel="noopener noreferrer">Search APKMirror</a>
-      </div>
+      <ul class="apps">
+        {% for app in s.apps %}
+        <li class="app">
+          <div>
+            <p class="version">{{ app.name }} {{ app.version }}</p>
+            <p class="meta">{{ "Stored" if app.have else "Needs upload" }}</p>
+          </div>
+          {% if not app.have %}
+          <div class="row">
+            <a class="btn primary" href="{{ app.links.release }}" target="_blank" rel="noopener noreferrer">Open on APKMirror</a>
+            <a class="btn" href="{{ app.links.search }}" target="_blank" rel="noopener noreferrer">Search</a>
+          </div>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
     {% else %}
       <p class="version">Nothing pending</p>
       <p class="meta">No candidate bundle is waiting for verification.</p>
@@ -45,7 +56,7 @@
     <h2 id="upload-h">Upload</h2>
     <form id="upload-form">
       <label class="drop" id="drop" for="apk">
-        <strong>Drop the APKM here, or click to choose</strong>
+        <strong>Drop a Waze or Google Maps APK here, or click to choose</strong>
         <span>.apkm, .apk, .xapk or .apks</span>
         <input type="file" id="apk" name="apk" accept=".apkm,.apk,.xapk,.apks" required>
       </label>

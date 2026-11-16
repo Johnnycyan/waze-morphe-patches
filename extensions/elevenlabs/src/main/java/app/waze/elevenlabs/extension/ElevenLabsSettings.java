@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.media.MediaPlayer;
 import android.text.InputType;
+import android.view.ContextThemeWrapper;
 import android.util.TypedValue;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -64,36 +65,39 @@ final class ElevenLabsSettings {
         return "On · " + (c.voiceName.isEmpty() ? c.voiceId : c.voiceName);
     }
 
-    static void show(Activity activity, Runnable onSaved) {
+    /** Opens the settings dialog. [note] explains what the host app needs for ElevenLabs to speak. */
+    static AlertDialog show(Activity activity, String note, Runnable onSaved) {
+        // Our own settings activity is translucent and unthemed; give its dialog the system look.
+        Context ui = activity instanceof ElevenLabsActivity
+                ? new ContextThemeWrapper(activity, android.R.style.Theme_DeviceDefault_DayNight) : activity;
         Config current = load(activity);
         int pad = dp(activity, 20);
-        LinearLayout form = new LinearLayout(activity);
+        LinearLayout form = new LinearLayout(ui);
         form.setOrientation(LinearLayout.VERTICAL);
         form.setPadding(pad, dp(activity, 8), pad, 0);
 
-        CheckBox enabled = new CheckBox(activity);
+        CheckBox enabled = new CheckBox(ui);
         enabled.setText("Use ElevenLabs for navigation voice");
         enabled.setChecked(current.enabled);
         form.addView(enabled);
-        form.addView(note(activity, "In Voice & sound → Waze voice, pick a voice marked “Including street names”. "
-                + "Only those voices give Waze the instruction text that ElevenLabs reads out."));
+        form.addView(note(ui, note));
 
-        EditText apiKey = field(activity, form, "API key", current.apiKey,
+        EditText apiKey = field(ui, form, "API key", current.apiKey,
                 InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        EditText voiceId = field(activity, form, "Voice ID", current.voiceId, InputType.TYPE_CLASS_TEXT);
+        EditText voiceId = field(ui, form, "Voice ID", current.voiceId, InputType.TYPE_CLASS_TEXT);
         final String[] voiceName = {current.voiceName};
-        Button pickVoice = button(activity, form, "Choose from my voices");
-        EditText modelId = field(activity, form, "Model ID", current.modelId, InputType.TYPE_CLASS_TEXT);
-        Button pickModel = button(activity, form, "Choose model");
+        Button pickVoice = button(ui, form, "Choose from my voices");
+        EditText modelId = field(ui, form, "Model ID", current.modelId, InputType.TYPE_CLASS_TEXT);
+        Button pickModel = button(ui, form, "Choose model");
 
-        SeekBar stability = slider(activity, form, "Stability", 0, 100, Math.round(current.stability * 100), v -> v + "%");
-        SeekBar similarity = slider(activity, form, "Similarity", 0, 100, Math.round(current.similarity * 100), v -> v + "%");
-        SeekBar speed = slider(activity, form, "Speed", 70, 120, Math.round(current.speed * 100),
+        SeekBar stability = slider(ui, form, "Stability", 0, 100, Math.round(current.stability * 100), v -> v + "%");
+        SeekBar similarity = slider(ui, form, "Similarity", 0, 100, Math.round(current.similarity * 100), v -> v + "%");
+        SeekBar speed = slider(ui, form, "Speed", 70, 120, Math.round(current.speed * 100),
                 v -> String.format(Locale.ROOT, "%.2f×", v / 100f));
 
-        TextView status = note(activity, "Last result: " + ElevenLabsBridge.status());
-        Button test = button(activity, form, "Test voice");
-        Button clear = button(activity, form, "Clear audio cache (" + megabytes(ElevenLabsClient.cacheSize(activity.getCacheDir())) + ")");
+        TextView status = note(ui, "Last result: " + ElevenLabsBridge.status());
+        Button test = button(ui, form, "Test voice");
+        Button clear = button(ui, form, "Clear audio cache (" + megabytes(ElevenLabsClient.cacheSize(activity.getCacheDir())) + ")");
         form.addView(status);
 
         // The stored name belongs to the ID it was picked with; a hand-typed ID has no name.
@@ -107,13 +111,13 @@ final class ElevenLabsSettings {
                     (speed.getProgress() + 70) / 100f);
         };
 
-        pickVoice.setOnClickListener(v -> choose(activity, status, "Choose a voice",
+        pickVoice.setOnClickListener(v -> choose(activity, ui, status, "Choose a voice",
                 () -> ElevenLabsClient.voices(apiKey.getText().toString().trim()), choice -> {
                     voiceId.setText(choice.id);
                     namedId[0] = choice.id;
                     voiceName[0] = choice.name;
                 }));
-        pickModel.setOnClickListener(v -> choose(activity, status, "Choose a model",
+        pickModel.setOnClickListener(v -> choose(activity, ui, status, "Choose a model",
                 () -> ElevenLabsClient.models(apiKey.getText().toString().trim()), choice -> modelId.setText(choice.id)));
         test.setOnClickListener(v -> {
             Config config = formConfig.get();
@@ -141,9 +145,9 @@ final class ElevenLabsSettings {
             });
         });
 
-        ScrollView scroll = new ScrollView(activity);
+        ScrollView scroll = new ScrollView(ui);
         scroll.addView(form);
-        new AlertDialog.Builder(activity)
+        return new AlertDialog.Builder(ui)
                 .setTitle("ElevenLabs voice")
                 .setView(scroll)
                 .setNegativeButton("Cancel", null)
@@ -160,7 +164,7 @@ final class ElevenLabsSettings {
     interface Picked { void picked(ElevenLabsClient.Choice choice); }
     interface Label { String of(int value); }
 
-    private static void choose(Activity activity, TextView status, String title, Loader loader, Picked picked) {
+    private static void choose(Activity activity, Context ui, TextView status, String title, Loader loader, Picked picked) {
         status.setText("Loading…");
         ElevenLabsBridge.background(() -> {
             try {
@@ -171,7 +175,7 @@ final class ElevenLabsSettings {
                     status.setText("Loaded " + choices.size());
                     String[] names = new String[choices.size()];
                     for (int i = 0; i < names.length; i++) names[i] = choices.get(i).name;
-                    new AlertDialog.Builder(activity).setTitle(title)
+                    new AlertDialog.Builder(ui).setTitle(title)
                             .setItems(names, (d, which) -> picked.picked(choices.get(which)))
                             .setNegativeButton("Cancel", null).show();
                 });
@@ -201,9 +205,9 @@ final class ElevenLabsSettings {
         return error.getClass().getSimpleName() + (error.getMessage() == null ? "" : ": " + error.getMessage());
     }
 
-    private static EditText field(Activity activity, LinearLayout form, String label, String value, int type) {
-        form.addView(label(activity, label));
-        EditText edit = new EditText(activity);
+    private static EditText field(Context ui, LinearLayout form, String label, String value, int type) {
+        form.addView(label(ui, label));
+        EditText edit = new EditText(ui);
         edit.setSingleLine(true);
         edit.setInputType(type);
         edit.setText(value);
@@ -211,18 +215,18 @@ final class ElevenLabsSettings {
         return edit;
     }
 
-    private static Button button(Activity activity, LinearLayout form, String text) {
-        Button button = new Button(activity);
+    private static Button button(Context ui, LinearLayout form, String text) {
+        Button button = new Button(ui);
         button.setText(text);
         button.setAllCaps(false);
         form.addView(button);
         return button;
     }
 
-    private static SeekBar slider(Activity activity, LinearLayout form, String name, int min, int max, int value, Label label) {
-        TextView title = label(activity, "");
+    private static SeekBar slider(Context ui, LinearLayout form, String name, int min, int max, int value, Label label) {
+        TextView title = label(ui, "");
         form.addView(title);
-        SeekBar bar = new SeekBar(activity);
+        SeekBar bar = new SeekBar(ui);
         bar.setMax(max - min);
         bar.setProgress(Math.max(0, Math.min(max - min, value - min)));
         title.setText(name + ": " + label.of(bar.getProgress() + min));

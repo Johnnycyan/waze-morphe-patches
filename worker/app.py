@@ -1,10 +1,11 @@
-"""Waze Patches worker.
+"""Patches worker.
 
-Serves a small page that says which Waze version the current candidate bundle needs, links to it
-on APKMirror, and accepts the upload. Each upload is checked (package, version, Waze's signing
-certificate), then the candidate bundle is test-patched onto it with Morphe. A pass is committed to
-the repository as verified/<key>.json, which lets CI publish the release; a failure opens an issue
-and leaves decompiled sources here for the fingerprint fix.
+Serves a small page that says which Waze and Google Maps versions the current candidate bundle
+needs, links to them on APKMirror, and accepts the uploads. Each upload is checked (package,
+version, the app's signing certificate). Once every app the candidate targets is stored, the bundle
+is test-patched onto each with Morphe. A pass is committed to the repository as
+verified/<key>.json, which lets CI publish the release; a failure opens an issue and, for Waze,
+leaves decompiled sources here for the fingerprint fix.
 """
 
 import base64
@@ -21,6 +22,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import zipfile
@@ -31,10 +33,12 @@ from flask import Flask, abort, jsonify, redirect, render_template, request, sen
 REPO = os.environ["GITHUB_REPO"]
 TOKEN = os.environ["GITHUB_TOKEN"]
 DATA = Path(os.environ.get("DATA_DIR", "/data"))
-# SHA-256 of Waze's signing certificate, taken from a Google Play download (5.27.4.900).
-WAZE_CERT = os.environ.get(
-    "WAZE_CERT_SHA256", "03637f6c5d8f604e6fdb79a6ffbfa578de4e318f8da22fc6106665247f8807d7"
-).lower()
+
+
+def _certs(env, default):
+    return {c.strip().lower() for c in os.environ.get(env, default).split(",") if c.strip()}
+
+
 PATCH = os.environ.get("PATCH_NAME", "ElevenLabs voice for navigation")
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "600"))
 UI_PASSWORD = os.environ.get("UI_PASSWORD", "")
@@ -46,6 +50,38 @@ MORPHE_VERSION = os.environ.get("MORPHE_VERSION", "unknown")
 CHUNK_BYTES = int(os.environ.get("UPLOAD_CHUNK_MB", "20")) * 1024 * 1024
 MAX_UPLOAD = 2 * 1024**3
 UPLOAD_EXTS = (".apk", ".apkm", ".xapk", ".apks")
+
+# The apps the bundle patches. "version_key" is the candidate.json field holding the version the
+# candidate needs; an app the candidate has no version for is not required.
+APPS = {
+    "waze": {
+        "name": "Waze",
+        "package": "com.waze",
+        "version_key": "waze_version",
+        # Waze's signing certificate, taken from a Google Play download (5.27.4.900).
+        "certs": _certs("WAZE_CERT_SHA256", "03637f6c5d8f604e6fdb79a6ffbfa578de4e318f8da22fc6106665247f8807d7"),
+        "release_url": "https://www.apkmirror.com/apk/waze/waze-gps-maps-traffic-alerts-live-navigation/"
+                       "waze-navigation-live-traffic-{dashed}-release/",
+        "search": "waze",
+        "fingerprints": "patches/src/main/kotlin/app/waze/elevenlabs/Fingerprints.kt",
+        # Decompiled for failed verifications: the code the Waze fingerprints target.
+        "diagnostics": ("com/waze/sound", "com/waze/settings"),
+    },
+    "maps": {
+        "name": "Google Maps",
+        "package": "com.google.android.apps.maps",
+        "version_key": "maps_version",
+        # Google's app signing key and its rotated successor (seen on 26.44.06).
+        "certs": _certs("MAPS_CERT_SHA256", "f0fd6c5b410f25cb25c3b53346c8972fae30f8ee7411df910480ad6b2d60db83,"
+                                            "7ce83c1b71f3d572fed04c8d40c5cb10ff75e6d87d9df6fbd53f0468c2905053"),
+        "release_url": "https://www.apkmirror.com/apk/google-inc/maps/google-maps-{dashed}-release/",
+        "search": "google maps",
+        "fingerprints": "patches/src/main/kotlin/app/waze/elevenlabs/maps/Fingerprints.kt",
+        # Maps is fully obfuscated and huge; decompiling it here is not worth the time.
+        "diagnostics": (),
+    },
+}
+PACKAGES = {cfg["package"]: app_id for app_id, cfg in APPS.items()}
 
 APKS = DATA / "apks"
 JOBS = DATA / "jobs"
@@ -84,7 +120,7 @@ def gh(method, path, body=None, accept="application/vnd.github+json", raw=False)
             "Authorization": f"Bearer {TOKEN}",
             "Accept": accept,
             "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "waze-morphe-patches-worker",
+            "User-Agent": "morphe-patches-worker",
         },
     )
     with _opener.open(req, timeout=120) as resp:
@@ -141,12 +177,14 @@ def cert_digests(apk: Path):
     out = run(["apksigner", "verify", "--print-certs", str(apk)])
     if out.returncode != 0:
         raise ValueError(f"{apk.name}: signature does not verify")
-    # App signers only; Play-delivered APKs also carry a Google "Source Stamp" signer.
-    return set(re.findall(r"^Signer #\d+ certificate SHA-256 digest: ([0-9a-f]{64})", out.stdout, re.M))
+    # App signers only: "Signer #1 ..." or, with key rotation, "Signer (minSdkVersion=...) ...".
+    # Play-delivered APKs also carry a Google "Source Stamp" signer, which this skips.
+    return set(re.findall(r"^Signer (?:#\d+|\([^)]*\)) certificate SHA-256 digest: ([0-9a-f]{64})",
+                          out.stdout, re.M))
 
 
 def inspect(upload: Path, work: Path):
-    """Checks an .apk/.apkm/.xapk/.apks upload. Returns (version_name, version_code, base_apk)."""
+    """Checks an .apk/.apkm/.xapk/.apks upload. Returns (app_id, version_name, version_code)."""
     with zipfile.ZipFile(upload) as z:
         names = z.namelist()
         if "AndroidManifest.xml" in names:
@@ -158,21 +196,33 @@ def inspect(upload: Path, work: Path):
             for n in members:
                 z.extract(n, work)
             apks = [work / n for n in members]
-    base = next((a for a in apks if a.name in ("base.apk", "com.waze.apk")), None) or apks[0]
+    bases = {"base.apk", *(f"{package}.apk" for package in PACKAGES)}
+    base = next((a for a in apks if a.name in bases), None) or apks[0]
     package, code, name = badging(base)
-    if package != "com.waze":
-        raise ValueError(f"package is {package}, not com.waze")
+    app_id = PACKAGES.get(package)
+    if not app_id:
+        raise ValueError(f"package is {package}, not one of {', '.join(sorted(PACKAGES))}")
+    cfg = APPS[app_id]
     for apk in apks:
         digests = cert_digests(apk)
-        if digests != {WAZE_CERT}:
-            raise ValueError(f"{apk.name} is not signed with Waze's certificate")
-    return name, code, base
+        if not digests or not digests <= cfg["certs"]:
+            raise ValueError(f"{apk.name} is not signed with {cfg['name']}'s certificate")
+    return app_id, name, code
 
 
-def stored_apk(version):
-    for p in APKS.glob(f"waze-{version}.*"):
+def stored_apk(app_id, version):
+    for p in APKS.glob(f"{app_id}-{version}.*"):
         return p
     return None
+
+
+def needed(cand):
+    """(app_id, version) for every app the candidate targets."""
+    return [(app_id, cand[cfg["version_key"]]) for app_id, cfg in APPS.items() if cand.get(cfg["version_key"])]
+
+
+def missing(cand):
+    return [(app_id, version) for app_id, version in needed(cand) if not stored_apk(app_id, version)]
 
 
 # --- Verification job --------------------------------------------------------
@@ -197,44 +247,58 @@ def verify(cand):
     d = job_dir(key)
     shutil.rmtree(d, ignore_errors=True)
     d.mkdir(parents=True)
-    apk = stored_apk(cand["waze_version"])
     write_status(key, state="running", started=now())
-    log = d / "morphe.log"
     try:
         mpp = d / "patches.mpp"
         gh_download(cand["mpp_asset"], mpp)
-        with open(log, "w") as out:
-            proc = subprocess.run(
-                ["java", "-jar", MORPHE_JAR, "patch", "-p", str(mpp), "--exclusive", "-e", PATCH,
-                 "--unsigned", "-r", str(d / "result.json"), "-t", str(d / "tmp"), "-o", str(d / "patched.apk"),
-                 str(apk)],
-                stdout=out, stderr=subprocess.STDOUT, timeout=3600,
-            )
-        tail = log.read_text(errors="replace")[-6000:]
-        ok = proc.returncode == 0 and (d / "patched.apk").exists() and patch_succeeded(d / "result.json")
-        shutil.rmtree(d / "tmp", ignore_errors=True)
-        (d / "patched.apk").unlink(missing_ok=True)
-        if ok:
+        apps = needed(cand)
+        apks = {a: stored_apk(a, v) for a, v in apps}
+        results = {a: patch_app(mpp, apks[a], d / a) for a, _ in apps}
+        tail = "\n\n".join(f"== {APPS[a]['name']}: {'passed' if ok else 'FAILED'}\n{log}"
+                            for a, (ok, log) in results.items())[-8000:]
+        failed = [a for a, (ok, _) in results.items() if not ok]
+        if not failed:
             record = {
-                "ok": True, "key": key, "version": cand["version"], "waze_version": cand["waze_version"],
-                "nl_tag": cand["nl_tag"], "commit": cand["commit"],
-                "apk_sha256": sha256(apk), "signing_cert_sha256": WAZE_CERT,
-                "morphe": MORPHE_VERSION, "verified_at": now(),
+                "ok": True, "key": key, "version": cand["version"], "nl_tag": cand["nl_tag"],
+                "commit": cand["commit"], "morphe": MORPHE_VERSION, "verified_at": now(),
+                **{APPS[a]["version_key"]: v for a, v in apps},
+                "apps": {
+                    a: {"version": v, "apk_sha256": sha256(apks[a]), "signing_certs_sha256": sorted(APPS[a]["certs"])}
+                    for a, v in apps
+                },
             }
+            versions = ", ".join(f"{APPS[a]['name']} {v}" for a, v in apps)
             gh("PUT", f"/repos/{REPO}/contents/verified/{key}.json", {
-                "message": f"verify: {cand['version']} on Waze {cand['waze_version']}",
+                "message": f"verify: {cand['version']} on {versions}",
                 "content": base64.b64encode((json.dumps(record, indent=2) + "\n").encode()).decode(),
             })
             write_status(key, state="verified", finished=now(), log=tail)
         else:
-            diagnostics(apk, d)
-            issue = open_issue(cand, tail)
+            diagnostics({a: apks[a] for a in failed}, d)
+            issue = open_issue(cand, failed, {a: results[a][1] for a in failed})
             write_status(key, state="failed", finished=now(), log=tail, issue=issue)
     except Exception as e:  # keep the worker alive; show the failure on the page
         write_status(key, state="error", finished=now(), log=f"{type(e).__name__}: {e}")
     finally:
         with lock:
             running.discard(key)
+
+
+def patch_app(mpp: Path, apk: Path, d: Path):
+    """Test-patches one APK. Returns (ok, log tail)."""
+    d.mkdir(parents=True, exist_ok=True)
+    log = d / "morphe.log"
+    with open(log, "w") as out:
+        proc = subprocess.run(
+            ["java", "-jar", MORPHE_JAR, "patch", "-p", str(mpp), "--exclusive", "-e", PATCH,
+             "--unsigned", "-r", str(d / "result.json"), "-t", str(d / "tmp"), "-o", str(d / "patched.apk"),
+             str(apk)],
+            stdout=out, stderr=subprocess.STDOUT, timeout=3600,
+        )
+    ok = proc.returncode == 0 and (d / "patched.apk").exists() and patch_succeeded(d / "result.json")
+    shutil.rmtree(d / "tmp", ignore_errors=True)
+    (d / "patched.apk").unlink(missing_ok=True)
+    return ok, log.read_text(errors="replace")[-6000:]
 
 
 def patch_succeeded(result: Path):
@@ -247,39 +311,49 @@ def patch_succeeded(result: Path):
         and not data.get("failedPatches")
 
 
-def diagnostics(apk: Path, d: Path):
-    """Decompiles the sound and settings code the patch fingerprints target, for the fix."""
-    with tempfile.TemporaryDirectory(dir=DATA) as tmp:
-        work = Path(tmp)
-        base = apk
-        if apk.suffix != ".apk":
-            with zipfile.ZipFile(apk) as z:
-                name = next(n for n in z.namelist() if n in ("base.apk", "com.waze.apk"))
-                z.extract(name, work)
-                base = work / name
-        out = work / "jadx"
-        run([JADX, "--no-res", "-j", "2", "-d", str(out), str(base)], timeout=3600)
-        src = out / "sources" / "com" / "waze"
-        with zipfile.ZipFile(d / "diagnostics.zip", "w", zipfile.ZIP_DEFLATED) as z:
-            for sub in ("sound", "settings"):
-                for f in (src / sub).rglob("*.java"):
-                    z.write(f, f.relative_to(out / "sources"))
+def diagnostics(apks: dict, d: Path):
+    """Decompiles the code the fingerprints target, for failed apps that have it configured."""
+    wanted = {a: apk for a, apk in apks.items() if APPS[a]["diagnostics"]}
+    if not wanted:
+        return
+    with zipfile.ZipFile(d / "diagnostics.zip", "w", zipfile.ZIP_DEFLATED) as z:
+        for app_id, apk in wanted.items():
+            with tempfile.TemporaryDirectory(dir=DATA) as tmp:
+                work = Path(tmp)
+                base = apk
+                if apk.suffix != ".apk":
+                    bases = ("base.apk", f"{APPS[app_id]['package']}.apk")
+                    with zipfile.ZipFile(apk) as bundle:
+                        name = next(n for n in bundle.namelist() if n in bases)
+                        bundle.extract(name, work)
+                        base = work / name
+                out = work / "jadx"
+                run([JADX, "--no-res", "-j", "2", "-d", str(out), str(base)], timeout=3600)
+                for sub in APPS[app_id]["diagnostics"]:
+                    for f in (out / "sources" / sub).rglob("*.java"):
+                        z.write(f, f.relative_to(out / "sources"))
 
 
-def open_issue(cand, tail):
-    title = f"Verification failed: {cand['version']} on Waze {cand['waze_version']}"
+def open_issue(cand, failed, logs):
+    versions = ", ".join(f"{APPS[a]['name']} {cand[APPS[a]['version_key']]}" for a in failed)
+    title = f"Verification failed: {cand['version']} on {versions}"
     existing = gh("GET", f"/repos/{REPO}/issues?state=open&per_page=100")
     for issue in existing:
         if issue["title"] == title:
             return issue["html_url"]
-    body = (
-        f"The ElevenLabs patch did not apply to Waze {cand['waze_version']}.\n\n"
-        f"- inputs: `{cand['key']}`\n- Waze target from nl {cand['nl_tag']}\n"
-        f"- Decompiled `com/waze/sound` and `com/waze/settings`: download `diagnostics.zip` from the worker page.\n\n"
-        f"Fix the fingerprints in `patches/src/main/kotlin/app/waze/elevenlabs/Fingerprints.kt`, push, and the next candidate is verified automatically.\n\n"
-        f"<details><summary>Morphe log (tail)</summary>\n\n```\n{tail}\n```\n</details>\n"
-    )
-    return gh("POST", f"/repos/{REPO}/issues", {"title": title, "body": body})["html_url"]
+    lines = [f"The ElevenLabs patch did not apply to {versions}.", "",
+             f"- inputs: `{cand['key']}`", f"- app versions from nl {cand['nl_tag']}"]
+    for a in failed:
+        cfg = APPS[a]
+        lines.append(f"- {cfg['name']}: fix the fingerprints in `{cfg['fingerprints']}`")
+        if cfg["diagnostics"]:
+            dirs = " and ".join(f"`{p}`" for p in cfg["diagnostics"])
+            lines.append(f"  - decompiled {dirs}: download `diagnostics.zip` from the worker page")
+    lines += ["", "Push the fix and the next candidate is verified automatically.", ""]
+    for a in failed:
+        lines += [f"<details><summary>{APPS[a]['name']}: Morphe log (tail)</summary>", "",
+                  "```", logs[a], "```", "</details>", ""]
+    return gh("POST", f"/repos/{REPO}/issues", {"title": title, "body": "\n".join(lines)})["html_url"]
 
 
 def now():
@@ -311,7 +385,7 @@ def refresh():
 def maybe_start(force=False):
     with lock:
         cand, verified = state["candidate"], state["verified"]
-        if not cand or verified or not stored_apk(cand["waze_version"]) or cand["key"] in running:
+        if not cand or verified or missing(cand) or cand["key"] in running:
             return False
         status = job_status(cand["key"])
         if status and status["state"] in ("verified", "failed", "error") and not force:
@@ -397,12 +471,12 @@ def logout():
     return redirect(url_for("login"))
 
 
-def apkmirror_links(version):
-    dashed = version.replace(".", "-")
+def apkmirror_links(app_id, version):
+    cfg = APPS[app_id]
+    query = urllib.parse.quote_plus(f"{cfg['search']} {version}")
     return {
-        "release": "https://www.apkmirror.com/apk/waze/waze-gps-maps-traffic-alerts-live-navigation/"
-                   f"waze-navigation-live-traffic-{dashed}-release/",
-        "search": f"https://www.apkmirror.com/?post_type=app_release&searchtype=apk&s=waze+{version}",
+        "release": cfg["release_url"].format(dashed=version.replace(".", "-")),
+        "search": f"https://www.apkmirror.com/?post_type=app_release&searchtype=apk&s={query}",
     }
 
 
@@ -414,7 +488,12 @@ def view_state():
     if cand:
         cand.pop("mpp_asset", None)
     job = job_status(cand["key"]) if cand else None
-    have = bool(cand) and stored_apk(cand["waze_version"]) is not None
+    apps = [
+        {"id": a, "name": APPS[a]["name"], "version": v, "have": stored_apk(a, v) is not None,
+         "links": apkmirror_links(a, v)}
+        for a, v in needed(cand)
+    ] if cand else []
+    have = bool(apps) and all(app["have"] for app in apps)
     if not cand:
         phase = "idle"
     elif verified:
@@ -428,8 +507,7 @@ def view_state():
     else:
         phase = "needs_apk"
     return {
-        "candidate": cand, "phase": phase, "job": job, "error": error, "checked_at": checked,
-        "links": apkmirror_links(cand["waze_version"]) if cand else None,
+        "candidate": cand, "apps": apps, "phase": phase, "job": job, "error": error, "checked_at": checked,
         "diagnostics": bool(cand) and (job_dir(cand["key"]) / "diagnostics.zip").exists(),
         "apks": sorted((p.name, round(p.stat().st_size / 1e6)) for p in APKS.iterdir()),
     }
@@ -501,20 +579,28 @@ def upload_finish(upload_id):
     (INCOMING / f"{upload_id}.json").unlink(missing_ok=True)
     try:
         with tempfile.TemporaryDirectory(dir=DATA) as work:
-            version, code, _ = inspect(tmp, Path(work))
+            app_id, version, code = inspect(tmp, Path(work))
     except (ValueError, zipfile.BadZipFile) as e:
         tmp.unlink(missing_ok=True)
         return jsonify(error=f"Rejected: {e}"), 422
-    for old in APKS.glob(f"waze-{version}.*"):
+    for old in APKS.glob(f"{app_id}-{version}.*"):
         old.unlink()
     # Morphe merges any zip of split APKs; store every bundle format under the extension it expects.
-    tmp.rename(APKS / f"waze-{version}{'.apk' if ext == '.apk' else '.apkm'}")
+    tmp.rename(APKS / f"{app_id}-{version}{'.apk' if ext == '.apk' else '.apkm'}")
     started = maybe_start(force=True)
     with lock:
         cand = state["candidate"]
-    wanted = cand["waze_version"] if cand else None
-    note = "" if version == wanted else f" The candidate needs {wanted}, so it was stored but not tested."
-    return jsonify(message=f"Stored Waze {version} ({code}).{' Verification started.' if started else ''}{note}")
+    name = APPS[app_id]["name"]
+    wanted = cand.get(APPS[app_id]["version_key"]) if cand else None
+    waiting = missing(cand) if cand else []
+    if wanted and version != wanted:
+        note = f" The candidate needs {name} {wanted}, so it was stored but not tested."
+    elif waiting:
+        note = " Verification starts once " + " and ".join(
+            f"{APPS[a]['name']} {v}" for a, v in waiting) + " is uploaded too."
+    else:
+        note = ""
+    return jsonify(message=f"Stored {name} {version} ({code}).{' Verification started.' if started else ''}{note}")
 
 
 @app.post("/api/notify")
@@ -544,7 +630,7 @@ def diagnostics_zip():
     f = job_dir(cand["key"]) / "diagnostics.zip" if cand else None
     if not f or not f.exists():
         abort(404)
-    return send_file(f, as_attachment=True, download_name=f"waze-{cand['waze_version']}-diagnostics.zip")
+    return send_file(f, as_attachment=True, download_name=f"{cand['key']}-diagnostics.zip")
 
 
 threading.Thread(target=poller, daemon=True).start()

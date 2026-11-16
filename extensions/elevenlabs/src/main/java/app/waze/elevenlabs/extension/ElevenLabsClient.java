@@ -38,6 +38,12 @@ final class ElevenLabsClient {
         Choice(String id, String name) { this.id = id; this.name = name; }
     }
 
+    /** Identifies how audio sounds under these settings: voice, model and voice settings. */
+    static String voiceIdentity(ElevenLabsSettings.Config config) {
+        return sha256(config.voiceId + '\n' + config.modelId + '\n' + config.stability + '\n'
+                + config.similarity + '\n' + config.speed);
+    }
+
     /** Cache file for this text under the given settings; it exists only once fully written. */
     static File cacheFile(File cacheDir, ElevenLabsSettings.Config config, String text) {
         String identity = config.voiceId + '\n' + config.modelId + '\n' + config.stability + '\n'

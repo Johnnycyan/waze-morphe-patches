@@ -1,7 +1,7 @@
 name: Sync, build and release
 
-# 1. Point upstream.lock at the newest Waze version nl-morphe-patches targets.
-# 2. Build the bundle for that Waze version and publish it as the "candidate" prerelease. The worker (worker/) waits for that APK to be uploaded, test-patches it
+# 1. Point upstream.lock at the newest Waze and Google Maps versions nl-morphe-patches targets.
+# 2. Build the bundle for those versions and publish it as the "candidate" prerelease. The worker (worker/) waits for both APKs to be uploaded, test-patches them
 #    and commits verified/<key>.json.
 # 3. Once the candidate's inputs are verified, publish that exact bundle as a release and update
 #    patches-bundle.json, which Morphe Manager reads.
@@ -50,7 +50,7 @@ jobs:
         run: |
           if [ "$(bash scripts/sync.sh)" = changed ]; then
             . <(grep -E '^[A-Z_]+=' upstream.lock)
-            git commit -am "chore: target Waze $WAZE_VERSION (nl $NL_TAG)"
+            git commit -am "chore: target Waze $WAZE_VERSION, Maps $MAPS_VERSION (nl $NL_TAG)"
             git pull --rebase origin main
             git push origin HEAD:main
           fi
@@ -83,7 +83,7 @@ jobs:
           KEY: ${{ steps.meta.outputs.KEY }}
           BASE_VERSION: ${{ steps.meta.outputs.BASE_VERSION }}
         run: |
-          # Rebuilds for the same VERSION and Waze version get a .N suffix.
+          # Rebuilds for the same VERSION and app versions get a .N suffix.
           version="$BASE_VERSION"; n=1
           while git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; do
             n=$((n + 1)); version="$BASE_VERSION.$n"
@@ -91,15 +91,14 @@ jobs:
           bash scripts/build.sh "$version"
 
           . <(grep -E '^[A-Z_]+=' upstream.lock)
-          waze="$WAZE_VERSION"
-          jq -n --arg key "$KEY" --arg version "$version" --arg waze "$waze" \
-                --arg nl "$NL_TAG" --arg commit "$GITHUB_SHA" \
-                '{key: $key, version: $version, waze_version: $waze, nl_tag: $nl, commit: $commit}' \
+          jq -n --arg key "$KEY" --arg version "$version" --arg waze "$WAZE_VERSION" \
+                --arg maps "$MAPS_VERSION" --arg nl "$NL_TAG" --arg commit "$GITHUB_SHA" \
+                '{key: $key, version: $version, waze_version: $waze, maps_version: $maps, nl_tag: $nl, commit: $commit}' \
                 > out/candidate.json
           gh release delete candidate --yes --cleanup-tag 2>/dev/null || true
           gh release create candidate --prerelease --target "$GITHUB_SHA" \
-            --title "Candidate $version (Waze $waze)" \
-            --notes "Awaiting verification against Waze $waze. Upload that APK to the worker. inputs: $KEY" \
+            --title "Candidate $version (Waze $WAZE_VERSION, Maps $MAPS_VERSION)" \
+            --notes "Awaiting verification against Waze $WAZE_VERSION and Google Maps $MAPS_VERSION. Upload both APKs to the worker. inputs: $KEY" \
             out/patches.mpp out/patches-list.json out/candidate.json
 
       # Optional: tell the worker now instead of at its next poll. Polling still covers a miss.
@@ -132,13 +131,14 @@ jobs:
           fi
           VERSION="$(jq -r .version out/candidate.json)"
           WAZE="$(jq -r .waze_version out/candidate.json)"
+          MAPS="$(jq -r .maps_version out/candidate.json)"
           NL_TAG="$(jq -r .nl_tag out/candidate.json)"
           mpp="patches-$VERSION.mpp"
           mv out/patches.mpp "out/$mpp"
           {
-            echo "ElevenLabs voice for Waze $WAZE, verified against the real APK."
+            echo "ElevenLabs voice for Waze $WAZE and Google Maps $MAPS, verified against the real APKs."
             echo
-            echo "- Waze version as targeted by nl-morphe-patches [$NL_TAG](https://gitlab.com/johninnld/nl-morphe-patches/-/releases/$NL_TAG)"
+            echo "- App versions as targeted by nl-morphe-patches [$NL_TAG](https://gitlab.com/johninnld/nl-morphe-patches/-/releases/$NL_TAG)"
             echo "- verification: verified/$KEY.json"
             echo
             echo "inputs: $KEY"

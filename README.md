@@ -1,19 +1,25 @@
-# Waze ElevenLabs Voice
+# ElevenLabs Voice for Waze and Google Maps
 
-A Morphe patch that has Waze speak navigation instructions and alerts with an
+Morphe patches that have Waze and Google Maps speak navigation instructions with an
 [ElevenLabs](https://elevenlabs.io) voice.
 
-It always targets the Waze version that [nl-morphe-patches](https://gitlab.com/johninnld/nl-morphe-patches)
-targets, so you can add both patch sources to Morphe Manager and patch Waze with patches from
-both in one go.
+They always target the Waze and Google Maps versions that
+[nl-morphe-patches](https://gitlab.com/johninnld/nl-morphe-patches) targets, so you can add both patch
+sources to Morphe Manager and patch each app with patches from both in one go.
 
 ## Use it
 
 1. In Morphe Manager, add this repository as a patch source (`github.com/Johnnycyan/waze-morphe-patches`).
    Manager reads `patches-bundle.json` from `main`.
-2. Patch Waze with **ElevenLabs voice for navigation** enabled. Don't also enable nl-morphe-patches'
-   **Use the system voice for navigation**, because both replace the same speech.
-3. In Waze, open **Settings** and tap **ElevenLabs voice**. It is also on the **Voice & sound** page.
+2. Patch Waze or Google Maps with **ElevenLabs voice for navigation** enabled. Don't also enable
+   nl-morphe-patches' **Use the system voice for navigation** for the same app, because both replace
+   the same speech.
+3. Open the settings entry and configure it (the dialog is the same in both apps):
+   - **Waze**: **Settings → ElevenLabs voice**. It is also on the **Voice & sound** page.
+   - **Google Maps**: **Settings → Navigation settings**, then **ElevenLabs voice** at the end of the
+     **Sound & voice** section.
+
+   In the dialog:
    - Turn on **Use ElevenLabs for navigation voice**.
    - Enter your ElevenLabs **API key**.
    - Pick a voice with **Choose from my voices**, or paste any **Voice ID**.
@@ -21,14 +27,17 @@ both in one go.
      the others.
    - **Stability**, **Similarity** and **Speed** are ElevenLabs' voice settings.
    - Tap **Test voice** to hear a sample, then tap **Save**.
-4. In **Voice & sound → Waze voice**, select a voice marked **Including street names**. Only those
-   voices give Waze the instruction text that ElevenLabs reads out.
+4. Waze only: in **Voice & sound → Waze voice**, select a voice marked **Including street names**.
+   Only those voices give Waze the instruction text that ElevenLabs reads out.
 
 Synthesized phrases are cached on the phone (up to 64 MB), so repeated instructions like "Turn left"
-cost no API credits and play instantly. If ElevenLabs is off, unconfigured, unreachable or slower
-than 9 seconds, Waze's own voice plays instead. The API key is stored in Waze's private app storage.
+cost no API credits and play instantly. If ElevenLabs is off, unconfigured or unreachable, the app's
+own voice plays instead (in Waze also when ElevenLabs is slower than 9 seconds). The API key is
+stored in the app's private storage.
 
 ## How it works
+
+### Waze
 
 The patch hooks Waze's sound player at three points and finds each one by what survives Waze's
 per-build renaming: Kotlin parameter null-check strings (`"onPlayCompleted"`, `"cacheKey"`), log
@@ -44,33 +53,58 @@ The MP3 from ElevenLabs is played through Waze's own file player, so audio focus
 completion callbacks behave as before.
 
 Code: [`patches/.../ElevenLabsVoicePatch.kt`](patches/src/main/kotlin/app/waze/elevenlabs/ElevenLabsVoicePatch.kt),
-[`Fingerprints.kt`](patches/src/main/kotlin/app/waze/elevenlabs/Fingerprints.kt), and the extension in
-[`extensions/elevenlabs`](extensions/elevenlabs/src/main/java/app/waze/elevenlabs/extension).
+[`Fingerprints.kt`](patches/src/main/kotlin/app/waze/elevenlabs/Fingerprints.kt), and
+[`ElevenLabsBridge.java`](extensions/elevenlabs/src/main/java/app/waze/elevenlabs/extension/ElevenLabsBridge.java).
+
+### Google Maps
+
+Maps is fully obfuscated, so the patch finds its targets by log strings, preference keys and
+framework types.
+
+- **Speech queue**: Maps prepares each instruction ahead of time. Its speech queue (found by the log
+  string `"Interrupted while waiting for an element in the queue."`) asks a synthesizer, either
+  Google's server voice or the TTS engine, to write the instruction text to a file. The patch
+  sends that call to the extension, which writes the ElevenLabs MP3 to that file instead. Maps
+  then plays it with its own player. If ElevenLabs fails, Maps' synthesizer runs as before.
+- **Speech cache**: Maps caches prepared instructions in `tts-cache` by instruction, not by voice.
+  When the voice changes, the cache is cleared at the next start, and until then cached
+  instructions are synthesized again.
+- **Settings**: the entry is added to the `sound_voice_settings` category of navigation settings.
+  androidx.preference keeps its class names but not its method names. The patch finds `setTitle`,
+  `setSummary` and `addPreference` by their code. The entry opens the settings dialog in a small
+  extension activity.
+
+Code: [`maps/MapsElevenLabsPatch.kt`](patches/src/main/kotlin/app/waze/elevenlabs/maps/MapsElevenLabsPatch.kt),
+[`maps/Fingerprints.kt`](patches/src/main/kotlin/app/waze/elevenlabs/maps/Fingerprints.kt), and
+[`MapsBridge.java`](extensions/elevenlabs/src/main/java/app/waze/elevenlabs/extension/MapsBridge.java).
 
 ## Release automation
 
 ```
-nl-morphe-patches release ──► pipeline.yml ──► "candidate" prerelease ──► worker page asks for Waze X
-                                                                                │ you upload the APKM
-                              release v… ◄── pipeline.yml ◄── verified/<key>.json ◄── worker test-patches
+nl-morphe-patches release ──► pipeline.yml ──► "candidate" prerelease ──► worker page asks for Waze X, Maps Y
+                                                                                │ you upload both APKMs
+                              release v… ◄── pipeline.yml ◄── verified/<key>.json ◄── worker test-patches both
 ```
 
 1. **Sync** (`.github/workflows/pipeline.yml`, every 4 hours): `scripts/sync.sh` reads
-   `WazeConstants.kt` at nl-morphe-patches' newest tag. If its newest Waze version differs from
-   `WAZE_VERSION` in `upstream.lock`, the lock is updated. NL releases for the same Waze version
-   change nothing.
-2. **Build**: `scripts/build.sh` builds the bundle for `WAZE_VERSION` and publishes it as the
+   `WazeConstants.kt` and the Google Maps `shared/Constants.kt` at nl-morphe-patches' newest tag. If
+   the newest Waze version or the Maps target differs from `upstream.lock`, the lock is updated. NL
+   releases for the same app versions change nothing.
+2. **Build**: `scripts/build.sh` builds the bundle for those versions and publishes it as the
    `candidate` prerelease, together with `candidate.json`.
-3. **Verify** (`worker/`): the worker page shows that Waze version with an APKMirror link. Upload the
-   APKM there. The worker checks the package name, version and Waze's signing certificate, then
-   applies the patch with Morphe. On success it commits `verified/<key>.json`. On failure it opens
-   an issue and offers the decompiled `com/waze/sound` and `com/waze/settings` sources for download.
+3. **Verify** (`worker/`): the worker page shows both app versions with APKMirror links. Upload each
+   APKM there. The worker checks the package name, version and the app's signing certificate. Once
+   both are stored, it applies the patch to each with Morphe. If both pass, it commits
+   `verified/<key>.json`. If one fails, it opens an issue. For Waze, it also offers the decompiled
+   `com/waze/sound` and `com/waze/settings` sources for download.
 4. **Release**: the push of `verified/<key>.json` re-runs the pipeline. It publishes
-   `v<VERSION>-waze.<WAZE_VERSION>` and updates `patches-bundle.json` and `patches-list.json`.
+   `v<VERSION>-waze.<WAZE_VERSION>.maps.<MAPS_VERSION_CODE>` and updates `patches-bundle.json` and
+   `patches-list.json`. Maps is named by its version code because its version name has zero-padded
+   parts (`26.44.06`), which semver rejects.
 
 `<key>` is a hash of `upstream.lock`, `VERSION`, the patch and extension sources and the build files,
 so a verification only covers the exact inputs it ran against. Pushing a code change builds and
-verifies a new candidate. If the worker already has that Waze APK, nothing needs uploading. Bump
+verifies a new candidate. If the worker already has both APKs, nothing needs uploading. Bump
 `VERSION` for notable changes. Otherwise rebuilds get a `.N` suffix.
 
 ## Setup
@@ -115,7 +149,8 @@ default), so they work behind a Cloudflare Tunnel, which caps each request at 10
 | `POLL_SECONDS` | `600` | how often to check for a new candidate |
 | `NOTIFY_TOKEN` | empty | lets the pipeline announce a new candidate at once (see below); empty disables `/api/notify` |
 | `PATCH_NAME` | `ElevenLabs voice for navigation` | patch the worker applies to verify |
-| `WAZE_CERT_SHA256` | Waze's cert | expected signing certificate of uploads |
+| `WAZE_CERT_SHA256` | Waze's cert | expected signing certificates of Waze uploads, comma-separated |
+| `MAPS_CERT_SHA256` | Google's cert and its rotated key | expected signing certificates of Google Maps uploads, comma-separated |
 
 ### 4. Instant verification (optional)
 
@@ -147,4 +182,5 @@ The bundle lands in `out/patches.mpp`.
 
 The structural sound-player hooks and `PromptTextCatalog` are adapted from
 [morphe-waze-system-tts](https://github.com/CasketPizza/morphe-waze-system-tts) by CasketPizza
-(GPLv3). The Waze version comes from nl-morphe-patches by johninnl.
+(GPLv3). The Waze and Google Maps versions come from nl-morphe-patches by johninnl, whose Maps
+system-voice patch showed where Maps synthesizes navigation speech.
